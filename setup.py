@@ -27,13 +27,9 @@ setup(
         'Programming Language :: Python :: 3.9',
     ],
     description="Python Boilerplate contains all the boilerplate you need to create a Python package.",
-    entry_points={
-        'console_scripts': [
-            'deepdespeckling=deepdespeckling.cli:main',
-        ],
-    },
-    install_requires=["numpy", "Pillow", "scipy",
-                      "torch", "opencv-python", "tqdm"],
+    install_requires=["numpy", "Pillow", "scipy", "torch", "tqdm"],
+    # opencv is only needed by the interactive crop tool (despeckle_from_crop)
+    extras_require={"crop": ["opencv-python"]},
     license="MIT license",
     include_package_data=True,
     keywords='deepdespeckling',

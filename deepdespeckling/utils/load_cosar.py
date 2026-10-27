@@ -1,5 +1,4 @@
 import struct
-from osgeo import gdal
 import numpy as np
 
 
@@ -68,6 +67,10 @@ def load_tiff_image(path_to_tiff_image: str) -> np.array:
     Returns:
         (numpy array): numpy array containing the tiff image
     """
+    # Imported here so the denoisers work without the GDAL Python bindings,
+    # which are only needed to read tiff files.
+    from osgeo import gdal
+
     dataset = gdal.Open(path_to_tiff_image)
 
     for x in range(1, dataset.RasterCount + 1):

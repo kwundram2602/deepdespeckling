@@ -25,9 +25,10 @@ class MerlinDenoiser(Denoiser):
 
         Args:
             model_name (str): name to be used, can be "spotlight", "stripmap" or "Sentinel-TOPS"
+                ("Sentinel_TOPS" is accepted as well)
         """
         super().__init__(**params)
-        self.model_name = model_name
+        self.model_name = "Sentinel-TOPS" if model_name == "Sentinel_TOPS" else model_name
         self.symetrise = symetrise
         self.M, self.m = self.init_min_max_norm_values()
         self.weights_path = self.init_model_weights_path()
@@ -188,7 +189,7 @@ class MerlinDenoiser(Denoiser):
         Returns:
             despeckled_image (dict): noisy and denoised images
         """
-        noisy_image = np.array(noisy_image).reshape(
+        noisy_image = np.asarray(noisy_image, dtype=np.float32).reshape(
             1, np.size(noisy_image, 0), np.size(noisy_image, 1), 2)
 
         # Pad the image
@@ -198,43 +199,46 @@ class MerlinDenoiser(Denoiser):
         noisy_image, noisy_image_real_part, noisy_image_imaginary_part = self.preprocess_noisy_image(
             noisy_image)
 
-        model = self.load_model(patch_size=patch_size)
+        model = self.get_model(patch_size=patch_size)
 
-        count_image = np.zeros(noisy_image_real_part.shape)
-        denoised_image_real_part = np.zeros(noisy_image_real_part.shape)
-        denoised_image_imaginary_part = np.zeros(noisy_image_real_part.shape)
+        count_image = np.zeros(noisy_image_real_part.shape, dtype=np.float32)
+        denoised_image_real_part = np.zeros(
+            noisy_image_real_part.shape, dtype=np.float32)
+        denoised_image_imaginary_part = np.zeros(
+            noisy_image_real_part.shape, dtype=np.float32)
 
         x_range = self.initialize_axis_range(
             image_height, patch_size, stride_size)
         y_range = self.initialize_axis_range(
             image_width, patch_size, stride_size)
 
-        for x in tqdm(x_range):
-            for y in y_range:
-                real_to_denoise = noisy_image_real_part[:,
-                                                        x:x + patch_size, y:y + patch_size, :]
-                imag_to_denoise = noisy_image_imaginary_part[:,
-                                                             x:x + patch_size, y:y + patch_size, :]
-                if self.symetrise:
-                    real_to_denoise, imag_to_denoise = symetrise_real_and_imaginary_parts(
-                        real_to_denoise, imag_to_denoise)
+        with torch.no_grad():
+            for x in tqdm(x_range):
+                for y in y_range:
+                    real_to_denoise = noisy_image_real_part[:,
+                                                            x:x + patch_size, y:y + patch_size, :]
+                    imag_to_denoise = noisy_image_imaginary_part[:,
+                                                                 x:x + patch_size, y:y + patch_size, :]
+                    if self.symetrise:
+                        real_to_denoise, imag_to_denoise = symetrise_real_and_imaginary_parts(
+                            real_to_denoise, imag_to_denoise)
 
-                real_to_denoise = torch.tensor(
-                    real_to_denoise, device=self.device, dtype=torch.float32)
-                imag_to_denoise = torch.tensor(
-                    imag_to_denoise, device=self.device, dtype=torch.float32)
+                    real_to_denoise = torch.tensor(
+                        real_to_denoise, device=self.device, dtype=torch.float32)
+                    imag_to_denoise = torch.tensor(
+                        imag_to_denoise, device=self.device, dtype=torch.float32)
 
-                real_to_denoise = (torch.log(torch.square(
-                    real_to_denoise)+1e-3)-2*self.m)/(2*(self.M-self.m))
-                imag_to_denoise = (torch.log(torch.square(
-                    imag_to_denoise)+1e-3)-2*self.m)/(2*(self.M-self.m))
+                    real_to_denoise = (torch.log(torch.square(
+                        real_to_denoise)+1e-3)-2*self.m)/(2*(self.M-self.m))
+                    imag_to_denoise = (torch.log(torch.square(
+                        imag_to_denoise)+1e-3)-2*self.m)/(2*(self.M-self.m))
 
-                denoised_image_real_part = self.denoise_image_kernel(
-                    real_to_denoise, denoised_image_real_part, x, y, patch_size, model)
-                denoised_image_imaginary_part = self.denoise_image_kernel(
-                    imag_to_denoise, denoised_image_imaginary_part, x, y, patch_size, model)
-                count_image = self.denoise_image_kernel(
-                    imag_to_denoise, count_image, x, y, patch_size, model, normalisation_kernel=True)
+                    denoised_image_real_part = self.denoise_image_kernel(
+                        real_to_denoise, denoised_image_real_part, x, y, patch_size, model)
+                    denoised_image_imaginary_part = self.denoise_image_kernel(
+                        imag_to_denoise, denoised_image_imaginary_part, x, y, patch_size, model)
+                    count_image = self.denoise_image_kernel(
+                        imag_to_denoise, count_image, x, y, patch_size, model, normalisation_kernel=True)
 
         denoised_image, denoised_image_real_part, denoised_image_imaginary_part = self.preprocess_denoised_image(
             denoised_image_real_part, denoised_image_imaginary_part, count_image)
@@ -250,6 +254,19 @@ class MerlinDenoiser(Denoiser):
                             }
 
         return despeckled_image
+
+    def denoise_array(self, noisy_image: np.array, patch_size: int, stride_size: int) -> np.array:
+        """Denoise a complex image held in memory and return only the denoised amplitude
+
+        Args:
+            noisy_image (numpy array): image of shape [height, width, 2], real and imaginary parts
+            patch_size (int): size of the patch of the convolution
+            stride_size (int): number of pixels between one convolution to the next
+
+        Returns:
+            (numpy array): denoised amplitude of shape [height, width]
+        """
+        return self.denoise_image(noisy_image, patch_size, stride_size)["denoised"]["full"]
 
     def denoise_images(self, images_to_denoise_path: list, save_dir: str, patch_size: int,
                        stride_size: int):

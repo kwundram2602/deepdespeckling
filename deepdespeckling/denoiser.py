@@ -1,6 +1,10 @@
 import logging
+from typing import Iterator, Tuple
+
 import torch
 import numpy as np
+
+from deepdespeckling.utils.constants import PATCH_SIZE, STRIDE_SIZE
 
 
 class Denoiser:
@@ -9,6 +13,22 @@ class Denoiser:
 
     def __init__(self):
         self.device = self.get_device()
+        self._models = {}
+
+    def get_model(self, patch_size: int):
+        """Get the model for a given patch size, loading its weights only once
+
+        Args:
+            patch_size (int): patch size
+
+        Returns:
+            model (Model): model loaded with stored weights, in eval mode
+        """
+        if patch_size not in self._models:
+            model = self.load_model(patch_size=patch_size)
+            model.eval()
+            self._models[patch_size] = model
+        return self._models[patch_size]
 
     def get_device(self) -> str:
         """Get torch device to use depending on gpu's availability
@@ -47,6 +67,55 @@ class Denoiser:
                     range(image_axis_dim - patch_size, image_axis_dim - patch_size + 1))
 
         return axis_range
+
+    @staticmethod
+    def _block_ranges(size: int, block_size: int, margin: int) -> Iterator[Tuple[int, int, int, int]]:
+        """Split one axis into blocks read with a margin on both sides
+
+        Yields:
+            (read_start, read_stop, write_start, write_stop): the extent to read, and the part
+            of it that is kept and written to the output
+        """
+        for start in range(0, size, block_size):
+            stop = min(start + block_size, size)
+            yield max(0, start - margin), min(size, stop + margin), start, stop
+
+    def denoise_image_tiled(self, image, out, block_size: int = 2048, patch_size: int = PATCH_SIZE,
+                            stride_size: int = STRIDE_SIZE):
+        """Denoise an image of any size block by block, so memory is bounded by the block size
+
+        Each block is read with a margin of patch_size pixels on every side and denoised with
+        denoise_array; only its inner part is written to out, so the block borders do not show.
+
+        Args:
+            image: array-like of shape [height, width] (SAR2SAR) or [height, width, 2] (MERLIN),
+                e.g. a numpy memmap; only the blocks are read into memory
+            out: array-like of shape [height, width] receiving the denoised amplitude
+            block_size (int): size of the blocks written to out. Defaults to 2048.
+            patch_size (int): patch size. Defaults to constant PATCH_SIZE.
+            stride_size (int): stride size. Defaults to constant STRIDE_SIZE.
+
+        Returns:
+            out: the given output array
+        """
+        height, width = image.shape[0], image.shape[1]
+        if height < patch_size or width < patch_size:
+            raise ValueError(
+                f"image of size {height}x{width} is smaller than the patch size {patch_size}")
+        if tuple(out.shape[:2]) != (height, width):
+            raise ValueError(
+                f"out has shape {tuple(out.shape)}, expected ({height}, {width})")
+
+        for r0, r1, w_r0, w_r1 in self._block_ranges(height, block_size, patch_size):
+            for c0, c1, w_c0, w_c1 in self._block_ranges(width, block_size, patch_size):
+                block = np.asarray(image[r0:r1, c0:c1], dtype=np.float32)
+                denoised = self.denoise_array(block, patch_size, stride_size)
+                out[w_r0:w_r1, w_c0:w_c1] = denoised[w_r0 - r0:w_r1 - r0, w_c0 - c0:w_c1 - c0]
+        return out
+
+    def denoise_array(self, noisy_image: np.array, patch_size: int, stride_size: int) -> np.array:
+        """Denoise an image held in memory and return only the denoised amplitude"""
+        raise NotImplementedError
 
     def save_despeckled_images(self):
         raise NotImplementedError

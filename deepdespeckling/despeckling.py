@@ -24,7 +24,7 @@ def _get_denoiser(model_name: str, symetrise: bool = True) -> Denoiser:
     Returns:
         denoiser (Denoiser): the right denoiser, Sar2SarDenoiser or MerlinDenoiser
     """
-    if model_name in ["spotlight", "stripmap", "Sentinel_TOPS"]:
+    if model_name in ["spotlight", "stripmap", "Sentinel-TOPS", "Sentinel_TOPS"]:
         denoiser = MerlinDenoiser(model_name=model_name, symetrise=symetrise)
     elif model_name == "sar2sar":
         denoiser = Sar2SarDenoiser()
@@ -120,7 +120,7 @@ def despeckle_from_crop(sar_images_path: str, destination_directory_path: str, m
                                                              folder_name="processed_images")
 
     ext = "cos" if model_name in ["spotlight",
-                                  "stripmap", "Sentinel_TOPS"] else "tiff"
+                                  "stripmap", "Sentinel-TOPS", "Sentinel_TOPS"] else "tiff"
     images_paths = glob(os.path.join(sar_images_path, f"*.{ext}")) + \
         glob(os.path.join(sar_images_path, "*.npy"))
 

@@ -1,5 +1,4 @@
 import numpy as np
-import cv2
 import os
 from PIL import Image
 from scipy import signal
@@ -356,6 +355,9 @@ def get_cropping_coordinates(image: np.array, destination_directory_path: str, m
         model_name (str): model name to be use for despeckling. Default to "spotlight"
         fixed (bool, optional): whether the area of selection has a fixed size of not. Defaults to True.
     """
+    # Imported here so the denoisers work without opencv, which only the crop tool needs.
+    import cv2
+
     image = preprocess_sar_image_for_cropping(image, model_name)
     full_image = image.copy()
     cropping = False
@@ -556,6 +558,8 @@ def preprocess_sar_image_for_cropping(image: np.array, model_name: str) -> np.ar
     Returns:
         image (cv2 image): image preprocessed for cropping
     """
+    import cv2
+
     if model_name in ["spotlight", "stripmap"]:
         image_data_real = image[:, :, 0]
         image_data_imag = image[:, :, 1]

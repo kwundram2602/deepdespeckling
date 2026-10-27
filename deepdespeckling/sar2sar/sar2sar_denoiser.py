@@ -12,7 +12,20 @@ from deepdespeckling.utils.constants import M, m
 from deepdespeckling.utils.utils import (denormalize_sar_image, load_sar_image, normalize_sar_image, save_image_to_npy_and_png,
                                          create_empty_folder_in_directory)
 
+try:
+    from numpy._core.multiarray import scalar as _numpy_scalar
+except ImportError:  # numpy < 2
+    from numpy.core.multiarray import scalar as _numpy_scalar
+
 current_dir = os.path.dirname(__file__)
+
+# Besides the weights, the SAR2SAR checkpoint holds the optimizer state with numpy scalars.
+# torch >= 2.6 loads with weights_only=True and rejects those unless they are allowed here.
+_CHECKPOINT_GLOBALS = [
+    (_numpy_scalar, "numpy.core.multiarray.scalar"),
+    np.dtype,
+    type(np.dtype(np.float64)),
+]
 
 
 class Sar2SarDenoiser(Denoiser):
@@ -23,7 +36,6 @@ class Sar2SarDenoiser(Denoiser):
         super().__init__(**params)
         self.weights_path = os.path.join(
             current_dir, "saved_model/sar2sar.pth")
-        print(self.weights_path)
 
     def load_model(self, patch_size: int) -> Model:
         """Load model with given weights 
@@ -37,8 +49,10 @@ class Sar2SarDenoiser(Denoiser):
         """
         model = Model(torch.device(self.device),
                       height=patch_size, width=patch_size)
-        model.load_state_dict(torch.load(
-            self.weights_path, map_location=torch.device("cpu"))['model_state_dict'])
+        with torch.serialization.safe_globals(_CHECKPOINT_GLOBALS):
+            checkpoint = torch.load(
+                self.weights_path, map_location=torch.device("cpu"), weights_only=True)
+        model.load_state_dict(checkpoint['model_state_dict'])
 
         return model
 
@@ -134,10 +148,10 @@ class Sar2SarDenoiser(Denoiser):
         image_height = noisy_image.size(dim=1)
         image_width = noisy_image.size(dim=2)
 
-        model = self.load_model(patch_size=patch_size)
+        model = self.get_model(patch_size=patch_size)
 
-        count_image = np.zeros((image_height, image_width))
-        denoised_image = np.zeros((image_height, image_width))
+        count_image = np.zeros((image_height, image_width), dtype=np.float32)
+        denoised_image = np.zeros((image_height, image_width), dtype=np.float32)
 
         x_range = self.initialize_axis_range(
             image_height, patch_size, stride_size)
@@ -165,6 +179,19 @@ class Sar2SarDenoiser(Denoiser):
                             }
 
         return despeckled_image
+
+    def denoise_array(self, noisy_image: np.array, patch_size: int, stride_size: int) -> np.array:
+        """Denoise an amplitude image held in memory and return only the denoised amplitude
+
+        Args:
+            noisy_image (numpy array): amplitude image of shape [height, width]
+            patch_size (int): size of the patch of the convolution
+            stride_size (int): number of pixels between one convolution to the next
+
+        Returns:
+            (numpy array): denoised amplitude of shape [height, width]
+        """
+        return self.denoise_image(noisy_image, patch_size, stride_size)["denoised"]
 
     def denoise_images(self, images_to_denoise_path: list, save_dir: str, patch_size: int,
                        stride_size: int):
